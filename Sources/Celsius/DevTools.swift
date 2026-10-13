@@ -32,7 +32,7 @@ enum DevTools {
         }
 
         // A newer release available: the dot on the settings row, and the update link in Settings.
-        let update = AppUpdate(version: "1.2.0", url: URL(string: "https://github.com/gbvillarinho/celsius/releases/latest")!)
+        let update = AppUpdate(version: "1.2.0", url: URL(string: "https://github.com/dusanbartos/celsius/releases/latest")!)
         for (name, connection) in [("update-available", ConnectionState.connected), ("update-available-settings", .needsSetup)] {
             let status = connection == .connected ? scenarios[0].1 : nil
             let store = ACStore(previewStatus: status, capabilities: caps, connection: connection, availableUpdate: update)

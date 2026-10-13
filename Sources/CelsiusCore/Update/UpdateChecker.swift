@@ -16,7 +16,7 @@ public struct AppUpdate: Equatable, Sendable {
 public struct UpdateChecker: Sendable {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
-    public static let latestReleaseURL = URL(string: "https://api.github.com/repos/gbvillarinho/celsius/releases/latest")!
+    public static let latestReleaseURL = URL(string: "https://api.github.com/repos/dusanbartos/celsius/releases/latest")!
 
     let currentVersion: String
     let transport: Transport

@@ -315,7 +315,7 @@ final class Clock: @unchecked Sendable {
     }
 
     private func checker(current: String, status: Int = 200, tag: String = "v1.2.0") -> UpdateChecker {
-        let body = #"{"tag_name":"\#(tag)","html_url":"https://github.com/gbvillarinho/celsius/releases/tag/\#(tag)"}"#
+        let body = #"{"tag_name":"\#(tag)","html_url":"https://github.com/dusanbartos/celsius/releases/tag/\#(tag)"}"#
         return UpdateChecker(currentVersion: current, transport: stubTransport(status: status, body: body))
     }
 
@@ -337,7 +337,7 @@ final class Clock: @unchecked Sendable {
     @MainActor @Test func storeKeepsTheUpdateAndChecksOncePerDay() async {
         let clock = Clock()
         let calls = RecordedRequests()
-        let body = #"{"tag_name":"v1.2.0","html_url":"https://github.com/gbvillarinho/celsius/releases/tag/v1.2.0"}"#
+        let body = #"{"tag_name":"v1.2.0","html_url":"https://github.com/dusanbartos/celsius/releases/tag/v1.2.0"}"#
         let transport: UpdateChecker.Transport = { request in
             calls.append(request)
             return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)

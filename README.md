@@ -1,13 +1,14 @@
 # Celsius
 
-[![Release](https://img.shields.io/github/v/release/gbvillarinho/celsius?style=flat-square)](https://github.com/gbvillarinho/celsius/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/gbvillarinho/celsius/total?style=flat-square)](https://github.com/gbvillarinho/celsius/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/gbvillarinho/celsius/release.yml?style=flat-square&label=build)](https://github.com/gbvillarinho/celsius/actions/workflows/release.yml)
-[![License: MIT](https://img.shields.io/github/license/gbvillarinho/celsius?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/dusanbartos/celsius?style=flat-square)](https://github.com/dusanbartos/celsius/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/dusanbartos/celsius/total?style=flat-square)](https://github.com/dusanbartos/celsius/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/dusanbartos/celsius/release.yml?style=flat-square&label=build)](https://github.com/dusanbartos/celsius/actions/workflows/release.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/dusanbartos/celsius/tests.yml?branch=main&style=flat-square&label=tests)](https://github.com/dusanbartos/celsius/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/github/license/dusanbartos/celsius?style=flat-square)](LICENSE)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?style=flat-square&logo=apple&logoColor=white)
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?style=flat-square&logo=swift&logoColor=white)
-[![Stars](https://img.shields.io/github/stars/gbvillarinho/celsius?style=flat-square)](https://github.com/gbvillarinho/celsius/stargazers)
-[![Last commit](https://img.shields.io/github/last-commit/gbvillarinho/celsius?style=flat-square)](https://github.com/gbvillarinho/celsius/commits/main)
+[![Stars](https://img.shields.io/github/stars/dusanbartos/celsius?style=flat-square)](https://github.com/dusanbartos/celsius/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/dusanbartos/celsius?style=flat-square)](https://github.com/dusanbartos/celsius/commits/main)
 
 Control your LG air conditioner from the Mac menu bar. Click the icon, pick a temperature, mode or fan
 speed, and that's it. No phone needed.
@@ -34,7 +35,7 @@ speed, and that's it. No phone needed.
 
 ## Install
 
-1. Go to the [Releases page](https://github.com/gbvillarinho/celsius/releases/latest).
+1. Go to the [Releases page](https://github.com/dusanbartos/celsius/releases/latest).
 2. Download `Celsius.zip`.
 3. Double-click it to unzip, then drag Celsius into your Applications folder.
 4. Open Celsius. Its icon shows up in the menu bar.
@@ -50,8 +51,8 @@ Install or update the Celsius menu bar app on this Mac.
 
 1. If Celsius is running, quit it (pkill -x Celsius).
 2. Download Celsius.zip from the latest release at
-   https://github.com/gbvillarinho/celsius/releases/latest
-   (for example: gh release download --repo gbvillarinho/celsius --pattern Celsius.zip)
+   https://github.com/dusanbartos/celsius/releases/latest
+   (for example: gh release download --repo dusanbartos/celsius --pattern Celsius.zip)
 3. Unzip it and move Celsius.app into /Applications, replacing any older copy.
 4. Remove the quarantine flag so macOS opens it without a warning:
    xattr -dr com.apple.quarantine /Applications/Celsius.app
@@ -109,8 +110,8 @@ Install or update the Celsius menu bar app on this Mac.
 
 1. If Celsius is running, quit it (pkill -x Celsius).
 2. Download Celsius.zip from the latest release at
-   https://github.com/gbvillarinho/celsius/releases/latest
-   (for example: gh release download --repo gbvillarinho/celsius --pattern Celsius.zip)
+   https://github.com/dusanbartos/celsius/releases/latest
+   (for example: gh release download --repo dusanbartos/celsius --pattern Celsius.zip)
 3. Unzip it and move Celsius.app into /Applications, replacing any older copy.
 4. Remove the quarantine flag so macOS opens it without a warning:
    xattr -dr com.apple.quarantine /Applications/Celsius.app
@@ -152,7 +153,7 @@ Celsius is a Swift Package (no Xcode project). You only need the Command Line To
 Build and install from source:
 
 ```sh
-git clone https://github.com/gbvillarinho/celsius.git
+git clone https://github.com/dusanbartos/celsius.git
 cd celsius
 scripts/build-app.sh --install    # build, ad-hoc sign, copy to /Applications and launch
 ```
