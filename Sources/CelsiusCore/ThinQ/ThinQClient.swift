@@ -59,9 +59,11 @@ public enum ThinQError: Error, Equatable, Sendable {
 public struct ThinQClient: Sendable {
     public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
-    /// Brazil is served by the Americas region.
-    public static let baseURL = URL(string: "https://api-aic.lgthinq.com/")!
-    public static let country = "BR"
+    /// Slovakia is served by the Europe, Middle East and Africa region.
+    public static let baseURL = URL(string: "https://api-eic.lgthinq.com/")!
+    public static let country = "SK"
+    /// Not a secret: a fixed key that LG publishes in the ThinQ Connect API reference, the same for every client.
+    /// https://smartsolution.developer.lge.com/en/apiManage/thinq_connect
     static let apiKey = "v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3"
 
     private static let log = Logger(subsystem: "com.gabrielvillarinho.celsius", category: "api")

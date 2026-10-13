@@ -30,7 +30,7 @@ speed, and that's it. No phone needed.
 
 - A Mac running macOS 15 or later
 - An LG air conditioner that already works in the LG ThinQ phone app
-- An LG account in Brazil (the app is set up for that region)
+- An LG account in Slovakia (the app is set up for that region)
 
 ## Install
 
@@ -133,7 +133,7 @@ LG's servers take a few seconds to confirm a change. Celsius shows the new value
 it a moment later.
 
 **Does it work in other countries?**
-Not yet. It's set up for Brazil.
+Not without a small code change. It's set up for Slovakia; see [For developers](#for-developers).
 
 **Does it work with any LG air conditioner?**
 It was built and tested with one model. Others should work, but some controls may be missing or behave
@@ -192,8 +192,10 @@ Layout:
 - `Tests/CelsiusCoreTests`: Swift Testing suites; fixtures are real responses from the unit, with the device ID replaced
 
 The app uses LG's official [ThinQ Connect API](https://connect-pat.lgthinq.com) with a Personal Access
-Token. The region is fixed to Brazil (`x-country: BR`, host `api-aic.lgthinq.com`); for another country,
-adjust `ThinQClient`. See [CLAUDE.md](CLAUDE.md) for architecture details and conventions.
+Token ([API reference](https://smartsolution.developer.lge.com/en/apiManage/thinq_connect)). The region is
+fixed to Slovakia (`x-country: SK`, host `api-eic.lgthinq.com`); for another country, set the host from the
+reference's Base URL table and the ISO country code in `ThinQClient`. See [CLAUDE.md](CLAUDE.md) for
+architecture details and conventions.
 
 ## License
 

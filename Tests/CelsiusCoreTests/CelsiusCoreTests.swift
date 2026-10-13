@@ -166,9 +166,9 @@ private func stubTransport(
 
         let request = try #require(recorder.all.first)
         #expect(request.httpMethod == "POST")
-        #expect(request.url?.absoluteString == "https://api-aic.lgthinq.com/devices/dev1/control")
+        #expect(request.url?.absoluteString == "https://api-eic.lgthinq.com/devices/dev1/control")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer tok")
-        #expect(request.value(forHTTPHeaderField: "x-country") == "BR")
+        #expect(request.value(forHTTPHeaderField: "x-country") == "SK")
         #expect(request.value(forHTTPHeaderField: "x-client-id") == "celsius-x")
         #expect(request.value(forHTTPHeaderField: "x-api-key") == "v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3")
         #expect(request.value(forHTTPHeaderField: "x-service-phase") == "OP")
