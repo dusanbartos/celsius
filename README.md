@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/dusanbartos/celsius?style=flat-square)](https://github.com/dusanbartos/celsius/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/dusanbartos/celsius/total?style=flat-square)](https://github.com/dusanbartos/celsius/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/dusanbartos/celsius/release.yml?style=flat-square&label=build)](https://github.com/dusanbartos/celsius/actions/workflows/release.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/dusanbartos/celsius/build.yml?branch=main&style=flat-square&label=build)](https://github.com/dusanbartos/celsius/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/dusanbartos/celsius/tests.yml?branch=main&style=flat-square&label=tests)](https://github.com/dusanbartos/celsius/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/dusanbartos/celsius?style=flat-square)](LICENSE)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?style=flat-square&logo=apple&logoColor=white)
