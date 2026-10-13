@@ -111,6 +111,13 @@ struct SettingsView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.warning)
                     }
+                    Toggle("Show temperature in menu bar", isOn: $store.showsMenuBarTemperature)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .font(.system(size: 13))
+                    if store.showsMenuBarTemperature, store.devices.count > 1 {
+                        menuBarUnitRow
+                    }
                     versionRow
                 }
             }
@@ -130,6 +137,26 @@ struct SettingsView: View {
             .font(.system(size: 12))
         }
     }
+
+    /// Which unit's room temperature the menu bar shows, when there are several.
+    private var menuBarUnitRow: some View {
+        HStack {
+            Text("Unit")
+                .font(.system(size: 13))
+            Spacer()
+            PopUpButton(
+                options: store.devices.map { ($0.displayName, $0.id) },
+                selection: Binding(
+                    get: { store.menuBarDevice?.id ?? "" },
+                    set: { store.menuBarDeviceID = $0 }
+                )
+            )
+            .frame(width: Self.unitPickerWidth)
+            .accessibilityLabel("Unit shown in the menu bar")
+        }
+    }
+
+    private static let unitPickerWidth: CGFloat = 140
 
     /// Minimum and maximum steppers bounded by what the device accepts, plus half degrees when it has them.
     private var temperatureLimits: some View {

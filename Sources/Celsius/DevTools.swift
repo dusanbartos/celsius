@@ -41,14 +41,20 @@ enum DevTools {
             renderNative(popover, to: directory.appendingPathComponent("\(name)-native.png"))
         }
 
-        // Several air conditioners on the account: the name becomes a menu, here and in Settings.
+        // Several air conditioners on the account: the overview, a unit's detail, and Settings.
         let rooms = ["Living room", "Bedroom"].enumerated().map { index, alias in
             ThinQDevice(deviceId: "preview-\(index)", deviceInfo: .init(deviceType: "DEVICE_AIR_CONDITIONER", modelName: "RAC_056905_WW", alias: alias))
         }
-        for (name, connection) in [("multiple-devices", ConnectionState.connected), ("multiple-devices-settings", .needsSetup)] {
-            let status = connection == .connected ? scenarios[0].1 : nil
-            let store = ACStore(previewStatus: status, capabilities: caps, connection: connection, devices: rooms)
-            let popover = PopoverView(store: store, fixedDate: date)
+        let bedroom = ACStatus(isOn: false, mode: ACMode.cool, currentTemperature: 27, targetTemperature: 24, fanSpeed: "AUTO", swing: false, eco: false)
+        let screens: [(String, PopoverView.Screen)] = [
+            ("multiple-devices", .overview), ("multiple-devices-detail", .detail), ("multiple-devices-settings", .settings),
+        ]
+        for (name, screen) in screens {
+            let store = ACStore(
+                previewStatus: scenarios[0].1, capabilities: caps, devices: rooms,
+                otherStatuses: [rooms[1].id: bedroom]
+            )
+            let popover = PopoverView(store: store, fixedDate: date, screen: screen)
             render(popover, to: directory.appendingPathComponent("\(name).png"))
             renderNative(popover, to: directory.appendingPathComponent("\(name)-native.png"))
         }

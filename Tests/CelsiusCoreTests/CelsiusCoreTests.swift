@@ -297,8 +297,10 @@ final class Clock: @unchecked Sendable {
         #expect(try json(control.httpBody) == ACCommand.power(true).payload)
     }
 
-    /// Two air conditioners and a washer: d1 is off, d2 is on.
-    private func makeMultiDeviceStore(settings: InMemorySettings, recorder: RecordedRequests) -> ACStore {
+    /// Two air conditioners and a washer: d1 is off, d2 is on. Commands to `offlineID` fail as offline.
+    private func makeMultiDeviceStore(
+        settings: InMemorySettings, recorder: RecordedRequests, offlineID: String? = nil
+    ) -> ACStore {
         let devices = #"""
             {"response":[
               {"deviceId":"d1","deviceInfo":{"deviceType":"DEVICE_AIR_CONDITIONER","alias":"Living room"}},
@@ -310,13 +312,21 @@ final class Clock: @unchecked Sendable {
         let transport: ThinQClient.Transport = { [offState] request in
             recorder.append(request)
             let path = request.url!.path
+            if let offlineID, path == "/devices/\(offlineID)/control" {
+                let body = #"{"error":{"message":"Not connected device","code":"1222"}}"#
+                return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!)
+            }
             let body = path.hasSuffix("/devices") ? devices
                 : path == "/devices/d1/state" ? #"{"response":\#(offState)}"#
                 : path == "/devices/d2/state" ? #"{"response":\#(onState)}"#
                 : #"{"response":{}}"#
             return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
-        return ACStore(settings: settings, makeClient: { ThinQClient(token: $0, clientID: $1, transport: transport) })
+        return ACStore(
+            settings: settings,
+            makeClient: { ThinQClient(token: $0, clientID: $1, transport: transport) },
+            sleep: { _ in }
+        )
     }
 
     @Test func listsOnlyAirConditionersAndStartsWithTheFirst() async {
@@ -350,17 +360,66 @@ final class Clock: @unchecked Sendable {
         #expect(recorder.all.contains { $0.url?.path == "/devices/d2/profile" })
     }
 
-    @Test func aChangeWaitingForTheOldDeviceIsNotSentToTheNewOne() async throws {
+    private func waitForSends(_ store: ACStore) async throws {
+        for _ in 0..<100 where store.isSending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func controlPaths(_ recorder: RecordedRequests) -> [String] {
+        recorder.all.compactMap(\.url?.path).filter { $0.hasSuffix("/control") }
+    }
+
+    @Test func aChangeWaitingForThePreviousDeviceStillGoesToIt() async throws {
         let recorder = RecordedRequests()
         let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: recorder)
         await store.refresh()
         store.perform(.power(true))
         await store.selectDevice(id: "d2")
-        for _ in 0..<50 where store.isSending {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(!recorder.all.contains { $0.url?.path.hasSuffix("/control") == true })
+        try await waitForSends(store)
+        #expect(controlPaths(recorder) == ["/devices/d1/control"])
         #expect(store.status?.isOn == true)
+        #expect(store.status(of: "d1")?.isOn == true)
+    }
+
+    @Test func switchingBackShowsTheLastKnownStateRightAway() async {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: RecordedRequests())
+        await store.refresh()
+        await store.refreshOtherDevices()
+        #expect(store.status(of: "d2")?.isOn == true)
+        // The cached state is there before the new read, so the detail never flashes empty.
+        let switching = Task { await store.selectDevice(id: "d2") }
+        await Task.yield()
+        #expect(store.device?.id == "d2")
+        #expect(store.status?.isOn == true)
+        #expect(store.connection == .connected)
+        await switching.value
+    }
+
+    @Test func turnsOffAnotherUnitWithoutSwitchingToIt() async throws {
+        let recorder = RecordedRequests()
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: recorder)
+        await store.refresh()
+        await store.refreshOtherDevices()
+        store.perform(.power(false), on: "d2")
+        #expect(store.status(of: "d2")?.isOn == false)
+        #expect(summary(store) == [0, 2])
+        try await waitForSends(store)
+        #expect(controlPaths(recorder) == ["/devices/d2/control"])
+        #expect(store.device?.id == "d1")
+    }
+
+    @Test func aFailedCommandToAnotherUnitLeavesTheSelectedOneConnected() async throws {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: RecordedRequests(), offlineID: "d2")
+        await store.refresh()
+        await store.refreshOtherDevices()
+        store.perform(.power(false), on: "d2")
+        try await waitForSends(store)
+        #expect(store.connection == .connected)
+        #expect(store.isOffline("d2"))
+        #expect(store.transientMessage?.hasPrefix("Bedroom:") == true)
+        // The change is rolled back.
+        #expect(store.status(of: "d2")?.isOn == true)
     }
 
     private func summary(_ store: ACStore) -> [Int]? { store.powerSummary.map { [$0.on, $0.total] } }
@@ -398,6 +457,35 @@ final class Clock: @unchecked Sendable {
         let before = recorder.all.count
         await store.refreshOtherDevices()
         #expect(recorder.all.dropFirst(before).compactMap(\.url?.path) == ["/devices/d2/state"])
+    }
+
+    @Test func menuBarSettingsArePersisted() {
+        let settings = InMemorySettings(token: "tok")
+        let store = ACStore(settings: settings)
+        #expect(store.showsMenuBarTemperature)
+        store.showsMenuBarTemperature = false
+        store.menuBarDeviceID = "d2"
+        #expect(settings.showsMenuBarTemperature == false)
+        #expect(settings.menuBarDeviceID == "d2")
+    }
+
+    @Test func menuBarFollowsTheSelectedUnitUntilOneIsPicked() async {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: RecordedRequests())
+        await store.refresh()
+        #expect(store.menuBarDevice?.id == "d1")
+        await store.selectDevice(id: "d2")
+        #expect(store.menuBarDevice?.id == "d2")
+        store.menuBarDeviceID = "d1"
+        await store.selectDevice(id: "d2")
+        #expect(store.menuBarDevice?.id == "d1")
+    }
+
+    @Test func aPickedUnitThatIsGoneFallsBackToTheSelectedOne() async {
+        let settings = InMemorySettings(token: "tok")
+        settings.menuBarDeviceID = "removed"
+        let store = makeMultiDeviceStore(settings: settings, recorder: RecordedRequests())
+        await store.refresh()
+        #expect(store.menuBarDevice?.id == "d1")
     }
 
     @Test func switchingToAnUnknownOrTheCurrentDeviceDoesNothing() async {

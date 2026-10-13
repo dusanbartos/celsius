@@ -79,9 +79,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         }
     }
 
+    /// The icon, temperature and tooltip describe the unit picked in Settings (the selected one by default).
     private func updateButton() {
         guard let button = statusItem.button else { return }
-        let status = store.status
+        let unit = store.menuBarDevice
+        let status = unit.flatMap { store.status(of: $0.id) }
         let isOn = status?.isOn ?? false
         let symbol = isOn ? "air.conditioner.horizontal.fill" : "air.conditioner.horizontal"
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Celsius")
@@ -90,9 +92,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         button.image = image?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
 
         let summary = store.powerSummary
-        // With several units, how many are on, e.g. "24° · 1/3".
+        // The room temperature unless turned off in Settings, then with several units how many are on,
+        // e.g. "24° · 1/3".
         let parts = [
-            status?.currentTemperature.map { "\(Labels.temperature($0))°" },
+            store.showsMenuBarTemperature ? status?.currentTemperature.map { "\(Labels.temperature($0))°" } : nil,
             summary.map { "\($0.on)/\($0.total)" },
         ].compactMap { $0 }
         button.title = parts.isEmpty ? "" : " " + parts.joined(separator: " · ")
@@ -103,7 +106,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
                 : "Off"
         }
         let count = summary.map { "\($0.on) of \($0.total) air conditioners on" }
-        let tip = [summary == nil ? nil : store.device?.displayName, detail, count].compactMap { $0 }
+        let tip = [summary == nil ? nil : unit?.displayName, detail, count].compactMap { $0 }
         button.toolTip = tip.isEmpty ? nil : tip.joined(separator: "\n")
     }
 }

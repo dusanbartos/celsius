@@ -14,19 +14,23 @@ public enum ConnectionState: Equatable, Sendable {
 ///
 /// The cloud can take a few seconds to reflect a command, so each change is kept as an override until
 /// the server confirms it or it expires. Commands are sent one at a time; a newer command for the same
-/// field replaces one that hasn't been sent yet.
+/// field of the same device replaces one that hasn't been sent yet.
+///
+/// The selected device gets the full treatment (capabilities, frequent reads, connection state). The other
+/// air conditioners on the account are read on the polling schedule, for the overview and the on/total count.
 @MainActor
 @Observable
 public final class ACStore {
-    public private(set) var serverStatus: ACStatus?
+    /// The last state read from the cloud for each device, by ID.
+    private var serverStatuses: [String: ACStatus] = [:]
     /// What the device's profile says it supports.
     public private(set) var deviceCapabilities: ACCapabilities = .fallback
     public private(set) var connection: ConnectionState = .loading
     public private(set) var device: ThinQDevice?
     /// Every air conditioner on the account, for switching between them.
     public private(set) var devices: [ThinQDevice] = []
-    /// Last known power of each device, by ID. The selected one's live status takes precedence.
-    private var powerByDevice: [String: Bool] = [:]
+    /// Devices other than the selected one that the cloud reported as offline on their last read.
+    private var offlineDevices: Set<String> = []
     public private(set) var isSending = false
     /// A short-lived error to show in the footer, e.g. a rejected command.
     public private(set) var transientMessage: String?
@@ -34,11 +38,21 @@ public final class ACStore {
     public private(set) var isReconnecting = false
     /// A newer release than the running app, if the last check found one.
     public private(set) var availableUpdate: AppUpdate?
-    private var overrides: [ACField: Override] = [:]
+    private var overrides: [Key: Override] = [:]
 
     /// The user's temperature range, saved as soon as it changes.
     public var temperatureLimits: TemperatureLimits {
         didSet { settings.temperatureLimits = temperatureLimits }
+    }
+
+    /// Whether the menu bar shows a unit's room temperature next to the icon, saved as soon as it changes.
+    public var showsMenuBarTemperature: Bool {
+        didSet { settings.showsMenuBarTemperature = showsMenuBarTemperature }
+    }
+
+    /// The unit the menu bar reports on; nil follows the selected one. Saved as soon as it changes.
+    public var menuBarDeviceID: String? {
+        didSet { settings.menuBarDeviceID = menuBarDeviceID }
     }
 
     /// Polls faster while the popover is open.
@@ -82,21 +96,36 @@ public final class ACStore {
     @ObservationIgnored private var failureStreak = 0
     @ObservationIgnored private var lastUpdateCheck: Date?
     @ObservationIgnored private var capabilitiesLoaded = false
+    /// Profiles already read, so switching back to a device doesn't wait for its profile again.
+    @ObservationIgnored private var capabilitiesByDevice: [String: ACCapabilities] = [:]
     @ObservationIgnored private var isRefreshing = false
     @ObservationIgnored private var isRefreshingOthers = false
     /// Set when the user picks another device, so a read still running for the previous one is dropped.
     @ObservationIgnored private var deviceSwitched = false
     @ObservationIgnored private var isActive = false
-    @ObservationIgnored private var queue: [ACCommand] = []
+    @ObservationIgnored private var queue: [Pending] = []
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var refreshSoonTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshOthersSoonTask: Task<Void, Never>?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var messageTask: Task<Void, Never>?
 
     struct Override {
         var command: ACCommand
         var expires: Date
+    }
+
+    /// What overrides and the queue coalesce on: one field of one device.
+    struct Key: Hashable {
+        var deviceID: String
+        var field: ACField
+    }
+
+    struct Pending {
+        var deviceID: String
+        var command: ACCommand
+        var key: Key { Key(deviceID: deviceID, field: command.field) }
     }
 
     public init(
@@ -113,13 +142,16 @@ public final class ACStore {
         self.now = now
         self.isPreview = false
         self.temperatureLimits = settings.temperatureLimits
+        self.showsMenuBarTemperature = settings.showsMenuBarTemperature
+        self.menuBarDeviceID = settings.menuBarDeviceID
         if settings.token?.isEmpty ?? true { connection = .needsSetup }
     }
 
     /// A store with fixed data that never touches the network, for snapshots.
     public init(
         previewStatus: ACStatus?, capabilities: ACCapabilities, connection: ConnectionState = .connected,
-        availableUpdate: AppUpdate? = nil, isReconnecting: Bool = false, devices: [ThinQDevice]? = nil
+        availableUpdate: AppUpdate? = nil, isReconnecting: Bool = false,
+        devices: [ThinQDevice]? = nil, otherStatuses: [String: ACStatus] = [:]
     ) {
         // Limits that keep the given capabilities as they are.
         let limits = TemperatureLimits(
@@ -128,6 +160,8 @@ public final class ACStore {
         )
         self.settings = InMemorySettings(token: "preview", temperatureLimits: limits)
         self.temperatureLimits = limits
+        self.showsMenuBarTemperature = true
+        self.menuBarDeviceID = nil
         self.makeClient = { ThinQClient(token: $0, clientID: $1) }
         self.now = Date.init
         self.isPreview = true
@@ -135,7 +169,6 @@ public final class ACStore {
         self.sleep = { _ in }
         self.availableUpdate = availableUpdate
         self.isReconnecting = isReconnecting
-        self.serverStatus = previewStatus
         self.deviceCapabilities = capabilities
         self.connection = connection
         let devices = devices ?? [ThinQDevice(
@@ -144,20 +177,41 @@ public final class ACStore {
         )]
         self.devices = devices
         self.device = devices.first
+        self.serverStatuses = otherStatuses
+        if let id = devices.first?.id { self.serverStatuses[id] = previewStatus }
     }
 
     // MARK: State
 
-    /// What the UI shows: server state plus pending changes.
-    public var status: ACStatus? {
-        guard var status = serverStatus else { return nil }
+    /// The selected device's last state read from the cloud.
+    public var serverStatus: ACStatus? { device.flatMap { serverStatuses[$0.id] } }
+
+    /// What the UI shows for the selected device: server state plus pending changes.
+    public var status: ACStatus? { device.flatMap { status(of: $0.id) } }
+
+    /// What the UI shows for any device: server state plus pending changes. Nil until it has been read.
+    public func status(of deviceID: String) -> ACStatus? {
+        guard var status = serverStatuses[deviceID] else { return nil }
         let date = now()
         for field in ACField.allCases {
-            if let override = overrides[field], override.expires > date {
+            if let override = overrides[Key(deviceID: deviceID, field: field)], override.expires > date {
                 status = status.applying(override.command)
             }
         }
         return status
+    }
+
+    /// Whether the cloud last reported the device as unreachable.
+    public func isOffline(_ deviceID: String) -> Bool {
+        guard deviceID == device?.id else { return offlineDevices.contains(deviceID) }
+        if case .offline = connection { return true }
+        return false
+    }
+
+    /// The unit the menu bar reports on: the one picked in Settings, or the selected one when none is picked
+    /// or the picked one is no longer on the account.
+    public var menuBarDevice: ThinQDevice? {
+        devices.first { $0.id == menuBarDeviceID } ?? device
     }
 
     /// What the UI offers: the device's capabilities within the user's temperature limits.
@@ -165,14 +219,11 @@ public final class ACStore {
 
     public var hasToken: Bool { !(settings.token?.isEmpty ?? true) }
 
-    /// How many of the account's air conditioners are on, with pending changes to the selected one applied.
+    /// How many of the account's air conditioners are on, with pending changes applied.
     /// Nil with a single unit. A unit not read yet counts as off.
     public var powerSummary: (on: Int, total: Int)? {
         guard devices.count > 1 else { return nil }
-        let on = devices.count { unit in
-            let isOn = unit.id == device?.id ? status?.isOn ?? powerByDevice[unit.id] : powerByDevice[unit.id]
-            return isOn == true
-        }
+        let on = devices.count { status(of: $0.id)?.isOn == true }
         return (on, devices.count)
     }
 
@@ -247,23 +298,24 @@ public final class ACStore {
         connection = .needsSetup
     }
 
-    /// Switches to another air conditioner on the account. Changes still waiting to be sent to the previous
-    /// one are dropped rather than sent to the new one.
+    /// Switches the detail view to another air conditioner on the account. Its last known state shows right
+    /// away while it's read again. Changes still waiting for the previous one are sent to it as planned.
     public func selectDevice(id: String) async {
         guard id != device?.id, let chosen = devices.first(where: { $0.id == id }) else { return }
-        if let previous = device, let isOn = serverStatus?.isOn { powerByDevice[previous.id] = isOn }
         device = chosen
         settings.deviceID = chosen.id
-        queue = []
-        debounceTask?.cancel()
         refreshSoonTask?.cancel()
-        overrides = [:]
-        serverStatus = nil
-        deviceCapabilities = .fallback
-        capabilitiesLoaded = false
+        let cached = capabilitiesByDevice[chosen.id]
+        deviceCapabilities = cached ?? .fallback
+        capabilitiesLoaded = cached != nil
+        offlineDevices.remove(chosen.id)
         failureStreak = 0
         isReconnecting = false
-        connection = .loading
+        if let status = serverStatuses[chosen.id] {
+            connection = status.hasError ? .deviceError : .connected
+        } else {
+            connection = .loading
+        }
         deviceSwitched = true
         await refresh()
     }
@@ -272,10 +324,11 @@ public final class ACStore {
         settings.deviceID = nil
         device = nil
         devices = []
-        powerByDevice = [:]
-        serverStatus = nil
+        serverStatuses = [:]
+        offlineDevices = []
         overrides = [:]
         capabilitiesLoaded = false
+        capabilitiesByDevice = [:]
     }
 
     // MARK: Refresh
@@ -299,19 +352,19 @@ public final class ACStore {
     private func read(with client: ThinQClient) async {
         if serverStatus == nil { connection = .loading }
         do {
-            let (status, capabilities) = try await retryingTransient {
+            let (deviceID, status, capabilities) = try await retryingTransient {
                 let deviceID = try await resolveDevice(client)
                 let capabilities = capabilitiesLoaded ? nil : try await client.capabilities(deviceID: deviceID)
-                return (try await client.status(deviceID: deviceID), capabilities)
+                return (deviceID, try await client.status(deviceID: deviceID), capabilities)
             }
             guard !deviceSwitched else { return }
             if let capabilities {
                 deviceCapabilities = capabilities
+                capabilitiesByDevice[deviceID] = capabilities
                 capabilitiesLoaded = true
             }
-            serverStatus = status
-            if let id = device?.id { powerByDevice[id] = status.isOn }
-            pruneOverrides()
+            serverStatuses[deviceID] = status
+            pruneOverrides(for: deviceID)
             noteSuccess()
             connection = status.hasError ? .deviceError : .connected
         } catch {
@@ -320,9 +373,9 @@ public final class ACStore {
         }
     }
 
-    /// Reads the power of every unit except the selected one, for the on/total count. Called on the regular
-    /// polling schedule only, so commands don't multiply requests. A failed read keeps the last known value,
-    /// except that an offline unit counts as off.
+    /// Reads every unit except the selected one, for the overview and the on/total count. Runs on the polling
+    /// schedule and after a command to one of them. A failed read keeps the last known state, except that an
+    /// offline unit is marked as such and counts as off.
     func refreshOtherDevices() async {
         guard !isPreview, !isRefreshingOthers, devices.count > 1, let token = settings.token, !token.isEmpty else { return }
         isRefreshingOthers = true
@@ -330,11 +383,14 @@ public final class ACStore {
         let client = makeClient(token, settings.clientID)
         for other in devices where other.id != device?.id {
             do {
-                powerByDevice[other.id] = try await client.status(deviceID: other.id).isOn
+                serverStatuses[other.id] = try await client.status(deviceID: other.id)
+                offlineDevices.remove(other.id)
+                pruneOverrides(for: other.id)
             } catch ThinQError.deviceOffline {
-                powerByDevice[other.id] = false
+                serverStatuses[other.id]?.isOn = false
+                offlineDevices.insert(other.id)
             } catch {
-                // Keep the last known value; the next poll tries again.
+                // Keep the last known state; the next poll tries again.
             }
         }
     }
@@ -369,12 +425,23 @@ public final class ACStore {
         return chosen.id
     }
 
-    /// Drops overrides the server has confirmed or that have expired.
-    private func pruneOverrides() {
-        guard let serverStatus else { return }
+    /// Drops the device's overrides that the server has confirmed or that have expired.
+    private func pruneOverrides(for deviceID: String) {
+        guard let serverStatus = serverStatuses[deviceID] else { return }
         let date = now()
-        overrides = overrides.filter { _, override in
-            override.expires > date && serverStatus.applying(override.command) != serverStatus
+        overrides = overrides.filter { key, override in
+            key.deviceID != deviceID
+                || override.expires > date && serverStatus.applying(override.command) != serverStatus
+        }
+    }
+
+    private func scheduleRefreshOfOthers(after delay: Duration) {
+        guard !isPreview else { return }
+        refreshOthersSoonTask?.cancel()
+        refreshOthersSoonTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.refreshOtherDevices()
         }
     }
 
@@ -405,15 +472,23 @@ public final class ACStore {
 
     // MARK: Commands
 
+    /// Changes the selected device.
     public func perform(_ command: ACCommand) {
-        guard let current = status else { return }
+        guard let id = device?.id else { return }
+        perform(command, on: id)
+    }
+
+    /// Changes any device on the account, e.g. power from the overview.
+    public func perform(_ command: ACCommand, on deviceID: String) {
+        guard let current = status(of: deviceID) else { return }
+        let pending = Pending(deviceID: deviceID, command: command)
         // Re-sending the current value is wasteful and, for power, rejected by the API.
-        if current.applying(command) == current, !queue.contains(where: { $0.field == command.field }) {
+        if current.applying(command) == current, !queue.contains(where: { $0.key == pending.key }) {
             return
         }
-        if command.field == .target { debounceTask?.cancel() }
-        overrides[command.field] = Override(command: command, expires: now().addingTimeInterval(Self.overrideLifetime))
-        enqueue(command)
+        if command.field == .target, deviceID == device?.id { debounceTask?.cancel() }
+        overrides[pending.key] = Override(command: command, expires: now().addingTimeInterval(Self.overrideLifetime))
+        enqueue(pending)
     }
 
     /// Updates the target right away and sends it once the value settles (used by the −/+ buttons).
@@ -423,21 +498,23 @@ public final class ACStore {
             perform(command)
             return
         }
-        overrides[.target] = Override(command: command, expires: now().addingTimeInterval(Self.overrideLifetime + 1))
+        guard let id = device?.id else { return }
+        let pending = Pending(deviceID: id, command: command)
+        overrides[pending.key] = Override(command: command, expires: now().addingTimeInterval(Self.overrideLifetime + 1))
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
             try? await Task.sleep(for: Self.stepDebounce)
             guard !Task.isCancelled, let self else { return }
-            self.overrides[.target]?.expires = self.now().addingTimeInterval(Self.overrideLifetime)
-            self.enqueue(command)
+            self.overrides[pending.key]?.expires = self.now().addingTimeInterval(Self.overrideLifetime)
+            self.enqueue(pending)
         }
     }
 
-    private func enqueue(_ command: ACCommand) {
-        if let index = queue.firstIndex(where: { $0.field == command.field }) {
-            queue[index] = command
+    private func enqueue(_ pending: Pending) {
+        if let index = queue.firstIndex(where: { $0.key == pending.key }) {
+            queue[index] = pending
         } else {
-            queue.append(command)
+            queue.append(pending)
         }
         guard worker == nil else { return }
         isSending = true
@@ -452,54 +529,77 @@ public final class ACStore {
         }
     }
 
-    private func send(_ command: ACCommand) async {
+    private func send(_ pending: Pending) async {
         guard !isPreview else { return }
-        guard let token = settings.token, let deviceID = device?.id else { return }
+        guard let token = settings.token else { return }
+        let (deviceID, command) = (pending.deviceID, pending.command)
         let client = makeClient(token, settings.clientID)
         var retried = false
         while true {
             do {
                 try await client.send(command, deviceID: deviceID)
-                // The user moved on to another device; its state says nothing about this command.
-                guard device?.id == deviceID else { return }
                 noteSuccess()
-                keepOverrideAlive(for: command)
-                if command.field == .eco {
-                    scheduleRefreshes(after: Self.ecoFollowUpDelays, untilTargetChangesFrom: serverStatus?.targetTemperature)
-                } else {
-                    scheduleRefresh(after: Self.refreshAfterSend)
-                }
+                keepOverrideAlive(for: pending)
+                confirmLater(pending)
                 return
             } catch let error as ThinQError where !retried && (error.isTransient || error == .deviceOffline) {
                 retried = true
-                keepOverrideAlive(for: command)
+                keepOverrideAlive(for: pending)
                 await sleep(error == .rateLimited ? Self.rateLimitRetryDelay : Self.commandRetryDelay)
                 // A newer value for the same field is already waiting, so this one is stale.
-                if queue.contains(where: { $0.field == command.field }) { return }
+                if queue.contains(where: { $0.key == pending.key }) { return }
                 // A timeout doesn't say whether the unit got the command; don't send it twice.
                 if case .network = error,
                    let current = try? await client.status(deviceID: deviceID),
                    current.applying(command) == current {
                     noteSuccess()
-                    scheduleRefresh(after: Self.refreshAfterSend)
+                    confirmLater(pending)
                     return
                 }
             } catch {
-                guard device?.id == deviceID else { return }
-                if overrides[command.field]?.command == command {
-                    overrides[command.field] = nil
+                if overrides[pending.key]?.command == command {
+                    overrides[pending.key] = nil
                 }
-                handle(error)
-                scheduleRefresh(after: Self.refreshAfterFailure)
+                if deviceID == device?.id {
+                    handle(error)
+                    scheduleRefresh(after: Self.refreshAfterFailure)
+                } else {
+                    handleOther(error, deviceID: deviceID)
+                }
                 return
             }
         }
     }
 
-    private func keepOverrideAlive(for command: ACCommand) {
-        if overrides[command.field]?.command == command {
-            overrides[command.field]?.expires = now().addingTimeInterval(Self.overrideLifetime)
+    /// Reads the device again once the cloud has had time to reflect the command.
+    private func confirmLater(_ pending: Pending) {
+        if pending.deviceID != device?.id {
+            scheduleRefreshOfOthers(after: Self.refreshAfterSend)
+        } else if pending.command.field == .eco {
+            scheduleRefreshes(after: Self.ecoFollowUpDelays, untilTargetChangesFrom: serverStatus?.targetTemperature)
+        } else {
+            scheduleRefresh(after: Self.refreshAfterSend)
         }
+    }
+
+    private func keepOverrideAlive(for pending: Pending) {
+        if overrides[pending.key]?.command == pending.command {
+            overrides[pending.key]?.expires = now().addingTimeInterval(Self.overrideLifetime)
+        }
+    }
+
+    /// A command to a unit other than the selected one failed: say so, without touching the selected
+    /// unit's connection state (unless the token itself is the problem).
+    private func handleOther(_ error: any Error, deviceID: String) {
+        if error is CancellationError { return }
+        let error = error as? ThinQError ?? .network(error.localizedDescription)
+        if error == .unauthorized {
+            connection = .unauthorized
+            return
+        }
+        if error == .deviceOffline { offlineDevices.insert(deviceID) }
+        let name = devices.first { $0.id == deviceID }?.displayName ?? "Air conditioner"
+        showMessage("\(name): \(error.message)")
     }
 
     private func handle(_ error: any Error) {

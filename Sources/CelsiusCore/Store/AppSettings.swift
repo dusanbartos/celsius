@@ -56,6 +56,9 @@ public protocol SettingsStorage: AnyObject {
     var clientID: String { get }
     var deviceID: String? { get set }
     var temperatureLimits: TemperatureLimits { get set }
+    var showsMenuBarTemperature: Bool { get set }
+    /// The unit whose temperature the menu bar shows; nil follows the selected one.
+    var menuBarDeviceID: String? { get set }
 }
 
 public final class AppSettings: SettingsStorage {
@@ -100,6 +103,17 @@ public final class AppSettings: SettingsStorage {
         }
         set { defaults.set(try? JSONEncoder().encode(newValue), forKey: "temperatureLimits") }
     }
+
+    /// On by default: the menu bar has always shown the room temperature.
+    public var showsMenuBarTemperature: Bool {
+        get { defaults.object(forKey: "showsMenuBarTemperature") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "showsMenuBarTemperature") }
+    }
+
+    public var menuBarDeviceID: String? {
+        get { defaults.string(forKey: "menuBarDeviceID") }
+        set { defaults.set(newValue, forKey: "menuBarDeviceID") }
+    }
 }
 
 public final class InMemorySettings: SettingsStorage {
@@ -107,6 +121,8 @@ public final class InMemorySettings: SettingsStorage {
     public var clientID = "celsius-test"
     public var deviceID: String?
     public var temperatureLimits: TemperatureLimits
+    public var showsMenuBarTemperature = true
+    public var menuBarDeviceID: String?
 
     public init(token: String? = nil, deviceID: String? = nil, temperatureLimits: TemperatureLimits = .standard) {
         self.token = token
