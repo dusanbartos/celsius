@@ -296,6 +296,120 @@ final class Clock: @unchecked Sendable {
         #expect(control.url?.path == "/devices/d1/control")
         #expect(try json(control.httpBody) == ACCommand.power(true).payload)
     }
+
+    /// Two air conditioners and a washer: d1 is off, d2 is on.
+    private func makeMultiDeviceStore(settings: InMemorySettings, recorder: RecordedRequests) -> ACStore {
+        let devices = #"""
+            {"response":[
+              {"deviceId":"d1","deviceInfo":{"deviceType":"DEVICE_AIR_CONDITIONER","alias":"Living room"}},
+              {"deviceId":"w1","deviceInfo":{"deviceType":"DEVICE_WASHER","alias":"Washer"}},
+              {"deviceId":"d2","deviceInfo":{"deviceType":"DEVICE_AIR_CONDITIONER","alias":"Bedroom"}}
+            ]}
+            """#
+        let onState = offState.replacingOccurrences(of: "POWER_OFF", with: "POWER_ON")
+        let transport: ThinQClient.Transport = { [offState] request in
+            recorder.append(request)
+            let path = request.url!.path
+            let body = path.hasSuffix("/devices") ? devices
+                : path == "/devices/d1/state" ? #"{"response":\#(offState)}"#
+                : path == "/devices/d2/state" ? #"{"response":\#(onState)}"#
+                : #"{"response":{}}"#
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        return ACStore(settings: settings, makeClient: { ThinQClient(token: $0, clientID: $1, transport: transport) })
+    }
+
+    @Test func listsOnlyAirConditionersAndStartsWithTheFirst() async {
+        let settings = InMemorySettings(token: "tok")
+        let store = makeMultiDeviceStore(settings: settings, recorder: RecordedRequests())
+        await store.refresh()
+        #expect(store.devices.map(\.id) == ["d1", "d2"])
+        #expect(store.device?.id == "d1")
+        #expect(settings.deviceID == "d1")
+    }
+
+    @Test func startsWithTheSavedDevice() async {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok", deviceID: "d2"), recorder: RecordedRequests())
+        await store.refresh()
+        #expect(store.device?.id == "d2")
+        #expect(store.status?.isOn == true)
+    }
+
+    @Test func switchingReadsTheOtherDeviceAndRemembersIt() async throws {
+        let settings = InMemorySettings(token: "tok")
+        let recorder = RecordedRequests()
+        let store = makeMultiDeviceStore(settings: settings, recorder: recorder)
+        await store.refresh()
+        #expect(store.status?.isOn == false)
+
+        await store.selectDevice(id: "d2")
+        #expect(store.device?.id == "d2")
+        #expect(settings.deviceID == "d2")
+        #expect(store.status?.isOn == true)
+        #expect(store.connection == .connected)
+        #expect(recorder.all.contains { $0.url?.path == "/devices/d2/profile" })
+    }
+
+    @Test func aChangeWaitingForTheOldDeviceIsNotSentToTheNewOne() async throws {
+        let recorder = RecordedRequests()
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: recorder)
+        await store.refresh()
+        store.perform(.power(true))
+        await store.selectDevice(id: "d2")
+        for _ in 0..<50 where store.isSending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!recorder.all.contains { $0.url?.path.hasSuffix("/control") == true })
+        #expect(store.status?.isOn == true)
+    }
+
+    private func summary(_ store: ACStore) -> [Int]? { store.powerSummary.map { [$0.on, $0.total] } }
+
+    @Test func noCountWithASingleUnit() async {
+        let store = makeStore(state: offState, clock: Clock(), recorder: RecordedRequests())
+        await store.refresh()
+        #expect(store.powerSummary == nil)
+    }
+
+    @Test func countsUnitsThatAreOn() async {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: RecordedRequests())
+        await store.refresh()
+        // The other unit hasn't been read yet, so it counts as off.
+        #expect(summary(store) == [0, 2])
+        await store.refreshOtherDevices()
+        #expect(summary(store) == [1, 2])
+        // A change to the selected unit counts right away, before the cloud confirms it.
+        store.perform(.power(true))
+        #expect(summary(store) == [2, 2])
+    }
+
+    @Test func countSurvivesSwitchingDevices() async {
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: RecordedRequests())
+        await store.refresh()
+        await store.refreshOtherDevices()
+        await store.selectDevice(id: "d2")
+        #expect(summary(store) == [1, 2])
+    }
+
+    @Test func otherUnitsAreReadWithoutTouchingTheSelectedOne() async {
+        let recorder = RecordedRequests()
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: recorder)
+        await store.refresh()
+        let before = recorder.all.count
+        await store.refreshOtherDevices()
+        #expect(recorder.all.dropFirst(before).compactMap(\.url?.path) == ["/devices/d2/state"])
+    }
+
+    @Test func switchingToAnUnknownOrTheCurrentDeviceDoesNothing() async {
+        let recorder = RecordedRequests()
+        let store = makeMultiDeviceStore(settings: InMemorySettings(token: "tok"), recorder: recorder)
+        await store.refresh()
+        let requests = recorder.all.count
+        await store.selectDevice(id: "d1")
+        await store.selectDevice(id: "w1")
+        #expect(store.device?.id == "d1")
+        #expect(recorder.all.count == requests)
+    }
 }
 
 @Suite struct UpdateTests {

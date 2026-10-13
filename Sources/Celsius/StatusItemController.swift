@@ -89,16 +89,21 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         image?.isTemplate = true
         button.image = image?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
 
-        if let room = status?.currentTemperature {
-            button.title = " \(Labels.temperature(room))°"
-        } else {
-            button.title = ""
-        }
+        let summary = store.powerSummary
+        // With several units, how many are on, e.g. "24° · 1/3".
+        let parts = [
+            status?.currentTemperature.map { "\(Labels.temperature($0))°" },
+            summary.map { "\($0.on)/\($0.total)" },
+        ].compactMap { $0 }
+        button.title = parts.isEmpty ? "" : " " + parts.joined(separator: " · ")
         button.appearsDisabled = !isOn && status != nil
-        button.toolTip = status.map { status in
+        let detail = status.map { status in
             status.isOn
                 ? "On · \(Labels.mode(status.mode)) · set to \(Labels.temperature(status.targetTemperature))°C"
                 : "Off"
         }
+        let count = summary.map { "\($0.on) of \($0.total) air conditioners on" }
+        let tip = [summary == nil ? nil : store.device?.displayName, detail, count].compactMap { $0 }
+        button.toolTip = tip.isEmpty ? nil : tip.joined(separator: "\n")
     }
 }

@@ -66,8 +66,7 @@ struct PopoverView: View {
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(store.device?.displayName ?? "Air conditioner")
-                    .font(.system(size: 13, weight: .semibold))
+                DevicePicker(store: store)
                 if store.transientMessage != nil || store.isReconnecting || store.connection != .connected {
                     FooterStatus(store: store)
                 } else {

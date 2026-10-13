@@ -41,6 +41,18 @@ enum DevTools {
             renderNative(popover, to: directory.appendingPathComponent("\(name)-native.png"))
         }
 
+        // Several air conditioners on the account: the name becomes a menu, here and in Settings.
+        let rooms = ["Living room", "Bedroom"].enumerated().map { index, alias in
+            ThinQDevice(deviceId: "preview-\(index)", deviceInfo: .init(deviceType: "DEVICE_AIR_CONDITIONER", modelName: "RAC_056905_WW", alias: alias))
+        }
+        for (name, connection) in [("multiple-devices", ConnectionState.connected), ("multiple-devices-settings", .needsSetup)] {
+            let status = connection == .connected ? scenarios[0].1 : nil
+            let store = ACStore(previewStatus: status, capabilities: caps, connection: connection, devices: rooms)
+            let popover = PopoverView(store: store, fixedDate: date)
+            render(popover, to: directory.appendingPathComponent("\(name).png"))
+            renderNative(popover, to: directory.appendingPathComponent("\(name)-native.png"))
+        }
+
         // Requests are failing, but the last known state is still shown.
         let reconnecting = ACStore(previewStatus: scenarios[0].1, capabilities: caps, isReconnecting: true)
         let reconnectingPopover = PopoverView(store: reconnecting, fixedDate: date)

@@ -39,8 +39,7 @@ struct SettingsView: View {
                             Image(systemName: "air.conditioner.horizontal")
                                 .font(.system(size: 16))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(device.displayName)
-                                    .font(.system(size: 13, weight: .semibold))
+                                DevicePicker(store: store)
                                 Text(device.deviceInfo.modelName ?? "")
                                     .font(.system(size: 11))
                                     .foregroundStyle(Theme.secondaryText)

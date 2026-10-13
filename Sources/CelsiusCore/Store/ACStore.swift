@@ -23,6 +23,10 @@ public final class ACStore {
     public private(set) var deviceCapabilities: ACCapabilities = .fallback
     public private(set) var connection: ConnectionState = .loading
     public private(set) var device: ThinQDevice?
+    /// Every air conditioner on the account, for switching between them.
+    public private(set) var devices: [ThinQDevice] = []
+    /// Last known power of each device, by ID. The selected one's live status takes precedence.
+    private var powerByDevice: [String: Bool] = [:]
     public private(set) var isSending = false
     /// A short-lived error to show in the footer, e.g. a rejected command.
     public private(set) var transientMessage: String?
@@ -79,6 +83,9 @@ public final class ACStore {
     @ObservationIgnored private var lastUpdateCheck: Date?
     @ObservationIgnored private var capabilitiesLoaded = false
     @ObservationIgnored private var isRefreshing = false
+    @ObservationIgnored private var isRefreshingOthers = false
+    /// Set when the user picks another device, so a read still running for the previous one is dropped.
+    @ObservationIgnored private var deviceSwitched = false
     @ObservationIgnored private var isActive = false
     @ObservationIgnored private var queue: [ACCommand] = []
     @ObservationIgnored private var worker: Task<Void, Never>?
@@ -112,7 +119,7 @@ public final class ACStore {
     /// A store with fixed data that never touches the network, for snapshots.
     public init(
         previewStatus: ACStatus?, capabilities: ACCapabilities, connection: ConnectionState = .connected,
-        availableUpdate: AppUpdate? = nil, isReconnecting: Bool = false
+        availableUpdate: AppUpdate? = nil, isReconnecting: Bool = false, devices: [ThinQDevice]? = nil
     ) {
         // Limits that keep the given capabilities as they are.
         let limits = TemperatureLimits(
@@ -131,10 +138,12 @@ public final class ACStore {
         self.serverStatus = previewStatus
         self.deviceCapabilities = capabilities
         self.connection = connection
-        self.device = ThinQDevice(
+        let devices = devices ?? [ThinQDevice(
             deviceId: "preview",
             deviceInfo: .init(deviceType: "DEVICE_AIR_CONDITIONER", modelName: "RAC_056905_WW", alias: "Ar-condicionado")
-        )
+        )]
+        self.devices = devices
+        self.device = devices.first
     }
 
     // MARK: State
@@ -155,6 +164,17 @@ public final class ACStore {
     public var capabilities: ACCapabilities { deviceCapabilities.limited(to: temperatureLimits) }
 
     public var hasToken: Bool { !(settings.token?.isEmpty ?? true) }
+
+    /// How many of the account's air conditioners are on, with pending changes to the selected one applied.
+    /// Nil with a single unit. A unit not read yet counts as off.
+    public var powerSummary: (on: Int, total: Int)? {
+        guard devices.count > 1 else { return nil }
+        let on = devices.count { unit in
+            let isOn = unit.id == device?.id ? status?.isOn ?? powerByDevice[unit.id] : powerByDevice[unit.id]
+            return isOn == true
+        }
+        return (on, devices.count)
+    }
 
     // MARK: Lifecycle
 
@@ -193,6 +213,7 @@ public final class ACStore {
                 guard let self else { return }
                 if first {
                     await self.refresh()
+                    await self.refreshOtherDevices()
                 } else {
                     first = true
                 }
@@ -226,9 +247,32 @@ public final class ACStore {
         connection = .needsSetup
     }
 
+    /// Switches to another air conditioner on the account. Changes still waiting to be sent to the previous
+    /// one are dropped rather than sent to the new one.
+    public func selectDevice(id: String) async {
+        guard id != device?.id, let chosen = devices.first(where: { $0.id == id }) else { return }
+        if let previous = device, let isOn = serverStatus?.isOn { powerByDevice[previous.id] = isOn }
+        device = chosen
+        settings.deviceID = chosen.id
+        queue = []
+        debounceTask?.cancel()
+        refreshSoonTask?.cancel()
+        overrides = [:]
+        serverStatus = nil
+        deviceCapabilities = .fallback
+        capabilitiesLoaded = false
+        failureStreak = 0
+        isReconnecting = false
+        connection = .loading
+        deviceSwitched = true
+        await refresh()
+    }
+
     private func forgetDevice() {
         settings.deviceID = nil
         device = nil
+        devices = []
+        powerByDevice = [:]
         serverStatus = nil
         overrides = [:]
         capabilitiesLoaded = false
@@ -244,24 +288,54 @@ public final class ACStore {
         }
         isRefreshing = true
         defer { isRefreshing = false }
-        if serverStatus == nil { connection = .loading }
-
         let client = makeClient(token, settings.clientID)
+        // Switching devices mid-read makes that read stale, so read again for the one now selected.
+        repeat {
+            deviceSwitched = false
+            await read(with: client)
+        } while deviceSwitched
+    }
+
+    private func read(with client: ThinQClient) async {
+        if serverStatus == nil { connection = .loading }
         do {
-            let status = try await retryingTransient {
+            let (status, capabilities) = try await retryingTransient {
                 let deviceID = try await resolveDevice(client)
-                if !capabilitiesLoaded {
-                    deviceCapabilities = try await client.capabilities(deviceID: deviceID)
-                    capabilitiesLoaded = true
-                }
-                return try await client.status(deviceID: deviceID)
+                let capabilities = capabilitiesLoaded ? nil : try await client.capabilities(deviceID: deviceID)
+                return (try await client.status(deviceID: deviceID), capabilities)
+            }
+            guard !deviceSwitched else { return }
+            if let capabilities {
+                deviceCapabilities = capabilities
+                capabilitiesLoaded = true
             }
             serverStatus = status
+            if let id = device?.id { powerByDevice[id] = status.isOn }
             pruneOverrides()
             noteSuccess()
             connection = status.hasError ? .deviceError : .connected
         } catch {
+            guard !deviceSwitched else { return }
             handle(error)
+        }
+    }
+
+    /// Reads the power of every unit except the selected one, for the on/total count. Called on the regular
+    /// polling schedule only, so commands don't multiply requests. A failed read keeps the last known value,
+    /// except that an offline unit counts as off.
+    func refreshOtherDevices() async {
+        guard !isPreview, !isRefreshingOthers, devices.count > 1, let token = settings.token, !token.isEmpty else { return }
+        isRefreshingOthers = true
+        defer { isRefreshingOthers = false }
+        let client = makeClient(token, settings.clientID)
+        for other in devices where other.id != device?.id {
+            do {
+                powerByDevice[other.id] = try await client.status(deviceID: other.id).isOn
+            } catch ThinQError.deviceOffline {
+                powerByDevice[other.id] = false
+            } catch {
+                // Keep the last known value; the next poll tries again.
+            }
         }
     }
 
@@ -285,7 +359,7 @@ public final class ACStore {
 
     private func resolveDevice(_ client: ThinQClient) async throws -> String {
         if let device, device.id == settings.deviceID { return device.id }
-        let devices = try await client.devices().filter(\.isAirConditioner)
+        devices = try await client.devices().filter(\.isAirConditioner)
         guard let chosen = devices.first(where: { $0.id == settings.deviceID }) ?? devices.first else {
             throw ThinQError.api(code: "", message: "No air conditioner found on this LG account")
         }
@@ -386,6 +460,8 @@ public final class ACStore {
         while true {
             do {
                 try await client.send(command, deviceID: deviceID)
+                // The user moved on to another device; its state says nothing about this command.
+                guard device?.id == deviceID else { return }
                 noteSuccess()
                 keepOverrideAlive(for: command)
                 if command.field == .eco {
@@ -409,6 +485,7 @@ public final class ACStore {
                     return
                 }
             } catch {
+                guard device?.id == deviceID else { return }
                 if overrides[command.field]?.command == command {
                     overrides[command.field] = nil
                 }

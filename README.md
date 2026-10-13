@@ -25,6 +25,7 @@ speed, and that's it. No phone needed.
 - Sets the fan speed and the air swing
 - Turns Eco mode on and off
 - Sets a sleep timer that turns the unit off after a few hours
+- Switches between air conditioners when your LG account has more than one
 - Opens when you log in, if you want it to
 
 ## What you need
