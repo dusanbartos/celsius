@@ -30,7 +30,7 @@ if [[ "${1:-}" == "--install" ]]; then
   rm -rf /Applications/Celsius.app
   cp -R "$APP" /Applications/Celsius.app
   if [[ -n "${CELSIUS_PAT:-}" ]]; then
-    security add-generic-password -U -s com.gabrielvillarinho.celsius -a thinq-pat \
+    security add-generic-password -U -s com.dusanbartos.celsius -a thinq-pat \
       -l "Celsius – LG ThinQ token" -w "$CELSIUS_PAT" -T /Applications/Celsius.app
     echo "Saved the LG token in the keychain"
   fi

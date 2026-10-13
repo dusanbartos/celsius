@@ -3,7 +3,7 @@ import Security
 
 /// Generic-password storage in the login keychain.
 public enum Keychain {
-    public static let service = "com.gabrielvillarinho.celsius"
+    public static let service = "com.dusanbartos.celsius"
 
     public static func read(_ account: String) -> String? {
         let query: [String: Any] = [

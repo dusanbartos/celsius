@@ -66,7 +66,7 @@ public struct ThinQClient: Sendable {
     /// https://smartsolution.developer.lge.com/en/apiManage/thinq_connect
     static let apiKey = "v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3"
 
-    private static let log = Logger(subsystem: "com.gabrielvillarinho.celsius", category: "api")
+    private static let log = Logger(subsystem: "com.dusanbartos.celsius", category: "api")
 
     let token: String
     let clientID: String
